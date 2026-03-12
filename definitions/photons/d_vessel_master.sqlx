@@ -31,7 +31,7 @@ with
 
 -- ── Live position (1 row per IMO, freshest ping) ───────────────────────────
 pos as (
-    select * from {{ ref('f_vessel_positions_latest') }}
+    select * from ${ ref('f_vessel_positions_latest') }
 ),
 
 -- ── Most recent arrival per IMO ────────────────────────────────────────────
@@ -42,7 +42,7 @@ arr_ranked as (
             PARTITION BY imo_number
             ORDER BY arrival_time DESC
         ) as _rn
-    from {{ ref('f_vessel_arrivals') }}
+    from ${ref('f_vessel_arrivals') }
 ),
 arr as (select * from arr_ranked where _rn = 1),
 
@@ -54,7 +54,7 @@ dep_ranked as (
             PARTITION BY imo_number
             ORDER BY departure_time DESC
         ) as _rn
-    from {{ ref('f_vessel_departures') }}
+    from ${ ref('f_vessel_departures') }
 ),
 dep as (select * from dep_ranked where _rn = 1),
 

@@ -92,7 +92,7 @@ select
     -- Staleness flag passed through from positions_latest via master
     position_is_stale                               as is_stale
 
-from  ${ref ('d_vessel_master') }
+from  ${ref('d_vessel_master') }
 
 where has_live_position = true
   and latitude  is not null
