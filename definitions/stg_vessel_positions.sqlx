@@ -1,0 +1,50 @@
+-- =============================================================================
+-- staging/stg_vessel_positions.sql
+-- Cast and validated AIS position snapshot from vessel_positions_ext
+-- All fields type-safe. One row per position ping (full history preserved).
+-- =============================================================================
+ config {type:'table', schema:'MPA' }
+
+with source as (
+
+    select
+        SAFE_CAST(imo_number    AS STRING)      as imo_number,
+        SAFE_CAST(mmsi_number   AS STRING)      as mmsi_number,
+
+        NULLIF(TRIM(vessel_name),  '')          as vessel_name,
+        NULLIF(TRIM(call_sign),    '')          as call_sign,
+        NULLIF(TRIM(flag),         '')          as flag,
+        NULLIF(TRIM(vessel_type),  '')          as vessel_type,
+
+        SAFE_CAST(gross_tonnage  AS INT64)      as gross_tonnage,
+        SAFE_CAST(net_tonnage    AS INT64)      as net_tonnage,
+        SAFE_CAST(deadweight     AS INT64)      as deadweight,
+        SAFE_CAST(vessel_length  AS INT64)      as vessel_length,
+        SAFE_CAST(vessel_breadth AS INT64)      as vessel_breadth,
+        SAFE_CAST(vessel_depth   AS INT64)      as vessel_depth,
+        SAFE_CAST(year_built     AS INT64)      as year_built,
+
+        SAFE_CAST(latitude  AS FLOAT64)         as latitude,
+        SAFE_CAST(longitude AS FLOAT64)         as longitude,
+        SAFE_CAST(speed     AS FLOAT64)         as speed_kn,
+        SAFE_CAST(course    AS FLOAT64)         as course_deg,
+        SAFE_CAST(heading   AS FLOAT64)         as heading_deg,
+
+        effective_timestamp,
+        ingested_at,
+        dt
+
+    from `photons-377606.MPA.vessel_positions_ext`
+
+    where effective_timestamp is not null
+      and SAFE_CAST(imo_number AS STRING) is not null
+
+)
+
+select *
+from source
+-- Filter out invalid coordinates
+where latitude  between -90  and 90
+  and longitude between -180 and 180
+  -- Exclude null island (0,0)
+  and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)

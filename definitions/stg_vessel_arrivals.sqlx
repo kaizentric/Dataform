@@ -1,0 +1,54 @@
+-- =============================================================================
+-- staging/stg_vessel_arrivals.sqlx
+-- Unions AIS confirmed arrivals + scheduled due-to-arrive into one clean layer
+-- =============================================================================
+
+config {
+  type: "view",
+  schema: "MPA",
+  name: "stg_vessel_arrivals"
+}
+
+with vessel_arrivals as (
+
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(vesselParticulars.imoNumber AS STRING))), '') as imo_number,
+        NULLIF(TRIM(vesselParticulars.vesselName), '') as vessel_name,
+        NULLIF(TRIM(vesselParticulars.callSign), '') as call_sign,
+        NULLIF(TRIM(vesselParticulars.flag), '') as flag,
+        CAST(arrivedTime AS TIMESTAMP) as arrival_time,
+        DATE(arrivedTime) as arrival_date,
+        NULLIF(TRIM(locationFrom), '') as location_from,
+        NULLIF(TRIM(locationTo), '') as location_to,
+        'AIS_CONFIRMED' as arrival_source,
+        ingested_at
+    from `photons-377606.MPA.MPA_VesselArrivalsbyDate`
+    where arrivedTime is not null
+
+),
+
+vessels_due as (
+
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(imo_number AS STRING))), '') as imo_number,
+        NULLIF(TRIM(vessel_name), '') as vessel_name,
+        NULLIF(TRIM(call_sign), '') as call_sign,
+        NULLIF(TRIM(flag), '') as flag,
+        CAST(arrived_time AS TIMESTAMP) as arrival_time,
+        DATE(arrived_time) as arrival_date,
+        NULLIF(TRIM(location_from), '') as location_from,
+        NULLIF(TRIM(location_to), '') as location_to,
+        'SCHEDULED' as arrival_source,
+        ingested_at
+    from `photons-377606.MPA.MPA_VesselsDuetoArrivebyDate`
+    where arrived_time is not null
+      and ingested_at = (
+          select max(ingested_at)
+          from `photons-377606.MPA.MPA_VesselsDuetoArrivebyDate`
+      )
+
+)
+
+select * from vessel_arrivals
+union all
+select * from vessels_due

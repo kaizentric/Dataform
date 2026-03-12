@@ -1,0 +1,60 @@
+config { type: "view",
+        schema: "MPA" }
+-- =============================================================================
+-- staging/stg_vessel_departures.sql
+-- Unions AIS confirmed departures + due-to-depart schedules
+-- =============================================================================
+ 
+
+with vessel_departures as (
+
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(vesselParticulars.imoNumber AS STRING))), '')
+                                            as imo_number,
+        NULLIF(TRIM(vesselParticulars.vesselName), '')
+                                            as vessel_name,
+        NULLIF(TRIM(vesselParticulars.callSign), '')
+                                            as call_sign,
+        NULLIF(TRIM(vesselParticulars.flag), '')
+                                            as flag,
+        CAST(departedTime AS TIMESTAMP)     as departure_time,
+        DATE(departedTime)                  as departure_date,
+        'AIS_CONFIRMED'                     as departure_source,
+        ingested_at,
+        CAST(null AS STRING)                as next_port,
+        CAST(null AS STRING)                as shipping_agent,
+        CAST(null AS INT64)                 as crew_count,
+        CAST(null AS INT64)                 as passenger_count
+    from `photons-377606.MPA.MPA_VesselDeparturesbyDate`
+    where departedTime is not null
+
+),
+
+vessels_due as (
+
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(imo_number AS STRING))), '')
+                                            as imo_number,
+        NULLIF(TRIM(vessel_name), '')       as vessel_name,
+        NULLIF(TRIM(call_sign), '')         as call_sign,
+        NULLIF(TRIM(flag), '')              as flag,
+        CAST(due_to_depart AS TIMESTAMP)    as departure_time,
+        DATE(due_to_depart)                 as departure_date,
+        'SCHEDULED'                         as departure_source,
+        ingested_at,
+        CAST(null AS STRING)                as next_port,
+        CAST(null AS STRING)                as shipping_agent,
+        CAST(null AS INT64)                 as crew_count,
+        CAST(null AS INT64)                 as passenger_count
+    from `photons-377606.MPA.MPA_VesselsDuetoDepartbyDate`
+    where due_to_depart is not null
+      and ingested_at = (
+          select max(ingested_at)
+          from `photons-377606.MPA.MPA_VesselsDuetoDepartbyDate`
+      )
+
+)
+
+select * from vessel_departures
+union all
+select * from vessels_due

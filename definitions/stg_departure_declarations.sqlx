@@ -1,0 +1,56 @@
+-- =============================================================================
+-- staging/stg_departure_declarations.sql
+-- Deduped official departure declarations — one record per IMO per departure date
+-- Contains next port, agent, crew, passenger count
+-- =============================================================================
+ config { type:'view', schema:'MPA'}
+
+with ranked as (
+
+    select
+        NULLIF(TRIM(UPPER(imo_number)), '0')        as imo_number,
+        NULLIF(TRIM(vessel_name), '')               as vessel_name,
+        NULLIF(TRIM(call_sign), '')                 as call_sign,
+        NULLIF(TRIM(flag), '')                      as flag,
+
+        NULLIF(TRIM(agent), '')                     as shipping_agent,
+        NULLIF(TRIM(next_port), '')                 as next_port,
+
+        CAST(reported_arrival_time AS TIMESTAMP)    as declared_arrival_at,
+        CAST(reported_departure_time AS TIMESTAMP)  as declared_departure_at,
+        DATE(reported_departure_time)               as declared_departure_date,
+
+        SAFE_CAST(TRIM(crew) AS INT64)              as crew_count,
+        SAFE_CAST(TRIM(pax)  AS INT64)              as passenger_count,
+
+        ingested_at,
+
+        ROW_NUMBER() OVER (
+            PARTITION BY TRIM(UPPER(imo_number)), DATE(reported_departure_time)
+            ORDER BY ingested_at DESC
+        ) as _rn
+
+    from `photons-377606.MPA.MPA_VesselDepartureDeclarationbyDate`
+
+    where imo_number is not null
+      and TRIM(imo_number) not in ('0', '', 'null')
+      and reported_departure_time is not null
+
+)
+
+select
+    imo_number,
+    vessel_name,
+    call_sign,
+    flag,
+    shipping_agent,
+    next_port,
+    declared_arrival_at,
+    declared_departure_at,
+    declared_departure_date,
+    crew_count,
+    passenger_count,
+    ingested_at
+
+from ranked
+where _rn = 1

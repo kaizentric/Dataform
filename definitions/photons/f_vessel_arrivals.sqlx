@@ -1,0 +1,133 @@
+-- =============================================================================
+-- facts/fct_vessel_arrivals.sql
+-- One unique arrival record per IMO per date.
+-- Merges AIS/scheduled arrivals + official declarations.
+-- Priority: DECLARATION > AIS_CONFIRMED > SCHEDULED
+-- =============================================================================
+ config { type :'view', schema:'MPA' }
+
+with
+
+-- ── Source A: AIS confirmed arrivals ──────────────────────────────────────
+ais_arrivals as (
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(vesselParticulars.imoNumber AS STRING))), '')
+                                                as imo_number,
+        NULLIF(TRIM(vesselParticulars.vesselName), '')
+                                                as vessel_name,
+        NULLIF(TRIM(vesselParticulars.callSign), '')
+                                                as call_sign,
+        NULLIF(TRIM(vesselParticulars.flag), '') as flag,
+        CAST(arrivedTime AS TIMESTAMP)           as arrival_time,
+        DATE(arrivedTime)                        as arrival_date,
+        NULLIF(TRIM(locationFrom), '')           as location_from,
+        NULLIF(TRIM(locationTo), '')             as location_to,
+        'AIS_CONFIRMED'                          as arrival_source,
+        ingested_at,
+        cast(null as string)                     as berth_grid,
+        cast(null as string)                     as voyage_purpose,
+        cast(null as string)                     as shipping_agent,
+        cast(null as int64)                      as crew_count,
+        cast(null as int64)                      as passenger_count
+    from `photons-377606.MPA.MPA_VesselArrivalsbyDate`
+    where arrivedTime is not null
+),
+
+-- ── Source B: Scheduled / due to arrive ───────────────────────────────────
+scheduled_arrivals as (
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(imo_number AS STRING))), '')
+                                                as imo_number,
+        NULLIF(TRIM(vessel_name), '')           as vessel_name,
+        NULLIF(TRIM(call_sign), '')             as call_sign,
+        NULLIF(TRIM(flag), '')                  as flag,
+        CAST(arrived_time AS TIMESTAMP)          as arrival_time,
+        DATE(arrived_time)                       as arrival_date,
+        NULLIF(TRIM(location_from), '')          as location_from,
+        NULLIF(TRIM(location_to), '')            as location_to,
+        'SCHEDULED'                              as arrival_source,
+        ingested_at,
+        cast(null as string)                     as berth_grid,
+        cast(null as string)                     as voyage_purpose,
+        cast(null as string)                     as shipping_agent,
+        cast(null as int64)                      as crew_count,
+        cast(null as int64)                      as passenger_count
+    from `photons-377606.MPA.MPA_VesselsDuetoArrivebyDate`
+    where arrived_time is not null
+      -- FIX: replaced exact max(ingested_at) match with a 24-hour window.
+      -- The exact match was fragile — any microsecond difference between
+      -- ingestion batches would silently drop next-day scheduled arrivals.
+      and ingested_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
+),
+
+-- ── Source C: Official arrival declarations ───────────────────────────────
+declared_arrivals as (
+    select
+        NULLIF(TRIM(UPPER(imo_number)), '')      as imo_number,
+        NULLIF(TRIM(vessel_name), '')            as vessel_name,
+        NULLIF(TRIM(call_sign), '')              as call_sign,
+        NULLIF(TRIM(flag), '')                   as flag,
+        CAST(reported_arrival_time AS TIMESTAMP) as arrival_time,
+        DATE(reported_arrival_time)              as arrival_date,
+        cast(null as string)                     as location_from,
+        NULLIF(TRIM(location), '')               as location_to,
+        'DECLARATION'                            as arrival_source,
+        ingested_at,
+        NULLIF(TRIM(grid), '')                   as berth_grid,
+        NULLIF(TRIM(purpose), '')                as voyage_purpose,
+        NULLIF(TRIM(agent), '')                  as shipping_agent,
+        SAFE_CAST(TRIM(crew) AS INT64)           as crew_count,
+        SAFE_CAST(TRIM(pax)  AS INT64)           as passenger_count
+    from `photons-377606.MPA.MPA_VesselArrivalDeclarationbyDate`
+    where imo_number is not null
+      and TRIM(imo_number) not in ('0', '', 'null')
+      and reported_arrival_time is not null
+),
+
+-- ── Union all three ────────────────────────────────────────────────────────
+all_arrivals as (
+    select * from ais_arrivals
+    union all
+    select * from scheduled_arrivals
+    union all
+    select * from declared_arrivals
+),
+
+-- ── Deduplicate: 1 row per IMO per day ────────────────────────────────────
+ranked as (
+    select
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY imo_number, arrival_date
+            ORDER BY
+                case arrival_source
+                    when 'DECLARATION'   then 1
+                    when 'AIS_CONFIRMED' then 2
+                    when 'SCHEDULED'     then 3
+                    else 4
+                end,
+                ingested_at desc
+        ) as _rn
+    from all_arrivals
+    where imo_number   is not null
+      and arrival_time is not null
+)
+
+select
+    imo_number,
+    vessel_name,
+    call_sign,
+    flag,
+    arrival_time,
+    arrival_date,
+    location_from,
+    location_to,
+    arrival_source,
+    berth_grid,
+    voyage_purpose,
+    shipping_agent,
+    crew_count,
+    passenger_count,
+    ingested_at
+from ranked
+where _rn = 1
