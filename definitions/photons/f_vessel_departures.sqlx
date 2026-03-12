@@ -1,0 +1,120 @@
+-- =============================================================================
+-- facts/fct_vessel_departures.sql
+-- One unique departure record per IMO per date.
+-- Merges AIS confirmed + scheduled + official departure declarations.
+-- Priority: DECLARATION > AIS_CONFIRMED > SCHEDULED
+-- =============================================================================
+config {type:'view', schema:'MPA' }
+
+with
+
+-- ── Source A: AIS confirmed departures ────────────────────────────────────
+ais_departures as (
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(vesselParticulars.imoNumber AS STRING))), '')
+                                                    as imo_number,
+        NULLIF(TRIM(vesselParticulars.vesselName), '')
+                                                    as vessel_name,
+        NULLIF(TRIM(vesselParticulars.callSign), '') as call_sign,
+        NULLIF(TRIM(vesselParticulars.flag), '')     as flag,
+        CAST(departedTime AS TIMESTAMP)              as departure_time,
+        DATE(departedTime)                           as departure_date,
+        'AIS_CONFIRMED'                              as departure_source,
+        ingested_at,
+        cast(null as string)                         as next_port,
+        cast(null as string)                         as shipping_agent,
+        cast(null as int64)                          as crew_count,
+        cast(null as int64)                          as passenger_count
+    from `photons-377606.MPA.MPA_VesselDeparturesbyDate`
+    where departedTime is not null
+),
+
+-- ── Source B: Scheduled / due to depart ───────────────────────────────────
+scheduled_departures as (
+    select
+        NULLIF(TRIM(UPPER(SAFE_CAST(imo_number AS STRING))), '')
+                                                    as imo_number,
+        NULLIF(TRIM(vessel_name), '')               as vessel_name,
+        NULLIF(TRIM(call_sign), '')                 as call_sign,
+        NULLIF(TRIM(flag), '')                      as flag,
+        CAST(due_to_depart AS TIMESTAMP)             as departure_time,
+        DATE(due_to_depart)                          as departure_date,
+        'SCHEDULED'                                  as departure_source,
+        ingested_at,
+        cast(null as string)                         as next_port,
+        cast(null as string)                         as shipping_agent,
+        cast(null as int64)                          as crew_count,
+        cast(null as int64)                          as passenger_count
+    from `photons-377606.MPA.MPA_VesselsDuetoDepartbyDate`
+    where due_to_depart is not null
+      and ingested_at = (
+          select max(ingested_at)
+          from `photons-377606.MPA.MPA_VesselsDuetoDepartbyDate`
+      )
+),
+
+-- ── Source C: Official departure declarations ──────────────────────────────
+declared_departures as (
+    select
+        NULLIF(TRIM(UPPER(imo_number)), '')           as imo_number,
+        NULLIF(TRIM(vessel_name), '')                 as vessel_name,
+        NULLIF(TRIM(call_sign), '')                   as call_sign,
+        NULLIF(TRIM(flag), '')                        as flag,
+        CAST(reported_departure_time AS TIMESTAMP)    as departure_time,
+        DATE(reported_departure_time)                 as departure_date,
+        'DECLARATION'                                 as departure_source,
+        ingested_at,
+        NULLIF(TRIM(next_port), '')                   as next_port,
+        NULLIF(TRIM(agent), '')                       as shipping_agent,
+        SAFE_CAST(TRIM(crew) AS INT64)                as crew_count,
+        SAFE_CAST(TRIM(pax)  AS INT64)                as passenger_count
+    from `photons-377606.MPA.MPA_VesselDepartureDeclarationbyDate`
+    where imo_number is not null
+      and TRIM(imo_number) not in ('0', '', 'null')
+      and reported_departure_time is not null
+),
+
+-- ── Union all three ────────────────────────────────────────────────────────
+all_departures as (
+    select * from ais_departures
+    union all
+    select * from scheduled_departures
+    union all
+    select * from declared_departures
+),
+
+-- ── Deduplicate: 1 row per IMO per day ────────────────────────────────────
+ranked as (
+    select
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY imo_number, departure_date
+            ORDER BY
+                case departure_source
+                    when 'DECLARATION'   then 1
+                    when 'AIS_CONFIRMED' then 2
+                    when 'SCHEDULED'     then 3
+                    else 4
+                end,
+                ingested_at desc
+        ) as _rn
+    from all_departures
+    where imo_number      is not null
+      and departure_time  is not null
+)
+
+select
+    imo_number,
+    vessel_name,
+    call_sign,
+    flag,
+    departure_time,
+    departure_date,
+    departure_source,
+    next_port,
+    shipping_agent,
+    crew_count,
+    passenger_count,
+    ingested_at
+from ranked
+where _rn = 1

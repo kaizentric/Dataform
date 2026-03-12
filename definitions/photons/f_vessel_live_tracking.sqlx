@@ -1,0 +1,106 @@
+-- =============================================================================
+-- facts/fct_vessel_live_tracking.sql
+-- Application-facing view — consumed directly by the MarineTrack backend API.
+--
+-- FIXES:
+--   1. latitude/longitude aliased directly (NO radians multiply here).
+--      Conversion happens once in fct_vessel_positions_latest.
+--      fct_vessel_master stores and passes degrees unchanged.
+--      Multiplying here would give: 1.35° × 57.3 = 77°N (Russia) — wrong.
+--   2. WHERE guards use degree scale (fct_vessel_master has degrees now)
+--   3. last_position_at used as-is — already corrected UTC from positions_latest
+--   4. minutes_since_last_ping used as-is — already correct from positions_latest
+-- =============================================================================
+config {type:'view', schema:'MPA' }
+
+select
+    -- Identity
+    imo_number,
+    mmsi_number,
+    vessel_name,
+    call_sign,
+    flag,
+    vessel_type,
+    gross_tonnage,
+    deadweight,
+    vessel_length,
+
+    -- FIX 1: pass degrees through directly — NO multiply by (180/ACOS(-1))
+    -- fct_vessel_positions_latest already converted radians→degrees.
+    -- fct_vessel_master stored and passed them through as degrees.
+    latitude                        as latitude_degrees,
+    longitude                       as longitude_degrees,
+
+    speed_kn                        as speed,
+    heading_deg                     as heading,
+    course_deg                      as course,
+
+    -- FIX 3: already corrected UTC — do not subtract 8h again
+    last_position_at,
+
+    speed_category,
+
+    -- FIX 4: already correct positive value from positions_latest
+    minutes_since_last_ping,
+
+    -- Voyage state
+    vessel_status,
+    arrived_at_berth                as berth_location,
+    arrived_from                    as last_port_departed,
+    latest_arrival_time,
+    latest_departure_time,
+    next_port                       as next_port_destination,
+    port_time_hours,
+    hours_in_port_so_far,
+
+    -- Voyage details
+    voyage_purpose,
+    arrival_agent                   as shipping_agent,
+    crew_count,
+    passenger_count,
+
+    -- Data quality
+    data_quality_score,
+    has_live_position,
+    has_arrival_record,
+    has_departure_record,
+    arrival_data_source,
+    departure_data_source,
+
+    -- Audit
+    most_recent_event_at,
+    last_updated_at,
+
+    -- Speed colour class
+    case
+        when speed_kn is null or speed_kn < 0.5    then 'STATIONARY'
+        when speed_kn < 3.0                         then 'SLOW'
+        when speed_kn < 10.0                        then 'MODERATE'
+        when speed_kn < 18.0                        then 'FAST'
+        else                                             'HIGH'
+    end                                             as speed_colour_class,
+
+    -- Status label for UI badge
+    case vessel_status
+        when 'IN_PORT'  then concat('In port: ',  coalesce(arrived_at_berth, 'Singapore'))
+        when 'UNDERWAY' then concat('Underway → ', coalesce(next_port, 'Unknown'))
+        when 'DEPARTED' then concat('Departed → ', coalesce(next_port, 'Unknown'))
+        when 'EXPECTED' then concat('Expected: ',  coalesce(arrived_at_berth, 'Unknown'))
+        else 'Unknown status'
+    end                                             as status_label,
+
+    -- Staleness flag passed through from positions_latest via master
+    position_is_stale                               as is_stale
+
+from  ${ref ('d_vessel_master') }
+
+where has_live_position = true
+  and latitude  is not null
+  and longitude is not null
+  -- FIX 2: degree-scale guards (fct_vessel_master now stores degrees)
+  and latitude  between -90   and 90
+  and longitude between -180  and 180
+  -- exclude null-island in degrees
+  and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)
+
+order by last_position_at desc

@@ -1,0 +1,198 @@
+-- =============================================================================
+-- facts/f_vessel_master.sql
+-- ─────────────────────────────────────────────────────────────────────────────
+-- THE MASTER TABLE — One unique row per IMO number.
+--
+-- Joins all fact layers into a single complete vessel record:
+--   ✦ Live AIS position (lat / lng / speed / heading)
+--   ✦ Latest confirmed arrival (berth / agent / crew / purpose)
+--   ✦ Latest confirmed departure (next port / time)
+--   ✦ Voyage status: UNDERWAY | IN_PORT | DEPARTED | EXPECTED | UNKNOWN
+--   ✦ Port time in hours (arrival → departure)
+--   ✦ Running in-port timer (if currently docked)
+--   ✦ Data quality score 0–100
+--
+-- WHY TABLE NOT INCREMENTAL:
+--   The incremental strategy used most_recent_event_at as a watermark.
+--   AIS batches write many vessels with the SAME effective_timestamp, so
+--   after the first run max(most_recent_event_at) equals the batch timestamp
+--   and every subsequent incremental run finds 0 new rows — table freezes.
+--   With only ~1,800 vessels a full table rebuild takes <5 seconds and is
+--   far cheaper than debugging watermark drift.
+-- =============================================================================
+
+  config {
+    type : 'table',
+    schema       : 'MPA'
+   
+}
+
+with
+
+-- ── Live position (1 row per IMO, freshest ping) ───────────────────────────
+pos as (
+    select * from {{ ref('f_vessel_positions_latest') }}
+),
+
+-- ── Most recent arrival per IMO ────────────────────────────────────────────
+arr_ranked as (
+    select
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY imo_number
+            ORDER BY arrival_time DESC
+        ) as _rn
+    from {{ ref('f_vessel_arrivals') }}
+),
+arr as (select * from arr_ranked where _rn = 1),
+
+-- ── Most recent departure per IMO ──────────────────────────────────────────
+dep_ranked as (
+    select
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY imo_number
+            ORDER BY departure_time DESC
+        ) as _rn
+    from {{ ref('f_vessel_departures') }}
+),
+dep as (select * from dep_ranked where _rn = 1),
+
+-- ── Spine — every known IMO from any source ────────────────────────────────
+all_imos as (
+    select distinct imo_number from pos  where imo_number is not null
+    union distinct
+    select distinct imo_number from arr  where imo_number is not null
+    union distinct
+    select distinct imo_number from dep  where imo_number is not null
+),
+
+-- ── Join all layers ────────────────────────────────────────────────────────
+combined as (
+    select
+        spine.imo_number,
+
+        -- Identity (AIS is source of truth; fall back to declarations)
+        coalesce(pos.mmsi_number,   null)                       as mmsi_number,
+        coalesce(pos.vessel_name,   arr.vessel_name,
+                 dep.vessel_name)                               as vessel_name,
+        coalesce(pos.call_sign,     arr.call_sign,
+                 dep.call_sign)                                 as call_sign,
+        coalesce(pos.flag,          arr.flag,
+                 dep.flag)                                      as flag,
+        coalesce(pos.vessel_type,   null)                       as vessel_type,
+
+        -- Vessel particulars (from AIS)
+        pos.gross_tonnage,
+        pos.net_tonnage,
+        pos.deadweight,
+        pos.vessel_length,
+        pos.vessel_breadth,
+        pos.vessel_depth,
+        pos.year_built,
+
+        -- ── Live position ──────────────────────────────────────────────────
+        pos.latitude,
+        pos.longitude,
+        pos.speed_kn,
+        pos.course_deg,
+        pos.heading_deg,
+        pos.last_position_at,           -- already corrected UTC from positions_latest
+        pos.speed_category,
+        pos.is_stale                    as position_is_stale,
+        pos.minutes_since_last_ping,    -- already correct from positions_latest
+
+        -- ── Latest arrival ─────────────────────────────────────────────────
+        arr.arrival_time            as latest_arrival_time,
+        arr.arrival_date            as latest_arrival_date,
+        arr.arrival_source,
+        arr.location_from           as arrived_from,
+        arr.location_to             as arrived_at_berth,
+        arr.berth_grid,
+        arr.voyage_purpose,
+        arr.shipping_agent          as arrival_agent,
+        arr.crew_count,
+        arr.passenger_count,
+
+        -- ── Latest departure ───────────────────────────────────────────────
+        dep.departure_time          as latest_departure_time,
+        dep.departure_date          as latest_departure_date,
+        dep.departure_source,
+        dep.next_port,
+        dep.shipping_agent          as departure_agent,
+
+        -- ── Voyage status ──────────────────────────────────────────────────
+        case
+            when pos.speed_kn > 1.0
+             and not coalesce(pos.is_stale, true)
+                then 'UNDERWAY'
+            when arr.arrival_time is not null
+             and (dep.departure_time is null
+                  or arr.arrival_time > dep.departure_time)
+                then 'IN_PORT'
+            when dep.departure_time is not null
+             and (arr.arrival_time is null
+                  or dep.departure_time > arr.arrival_time)
+                then 'DEPARTED'
+            when arr.arrival_source = 'SCHEDULED'
+                then 'EXPECTED'
+            else 'UNKNOWN'
+        end                                                     as vessel_status,
+
+        -- ── Port time ─────────────────────────────────────────────────────
+        case
+            when arr.arrival_time is not null
+             and dep.departure_time is not null
+             and dep.departure_time > arr.arrival_time
+            then round(
+                TIMESTAMP_DIFF(dep.departure_time, arr.arrival_time, MINUTE)
+                / 60.0, 2)
+            else null
+        end                                                     as port_time_hours,
+
+        -- ── Running in-port timer ──────────────────────────────────────────
+        case
+            when arr.arrival_time is not null
+             and (dep.departure_time is null
+                  or arr.arrival_time > dep.departure_time)
+            then round(
+                TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), arr.arrival_time, MINUTE)
+                / 60.0, 2)
+            else null
+        end                                                     as hours_in_port_so_far,
+
+        -- ── Data quality score 0–100 ────────────────────────────────────────
+        (
+          case when not coalesce(pos.is_stale, true)       then 20 else 0 end +
+          case when arr.arrival_source = 'AIS_CONFIRMED'   then 20 else 0 end +
+          case when arr.arrival_source = 'DECLARATION'     then 20 else 0 end +
+          case when dep.departure_source is not null       then 20 else 0 end +
+          case when pos.gross_tonnage    is not null       then 20 else 0 end
+        )                                                       as data_quality_score,
+
+        -- ── Source coverage flags ──────────────────────────────────────────
+        case when pos.imo_number is not null then true else false end
+                                                                as has_live_position,
+        case when arr.imo_number is not null then true else false end
+                                                                as has_arrival_record,
+        case when dep.imo_number is not null then true else false end
+                                                                as has_departure_record,
+        coalesce(arr.arrival_source,   'NONE')                  as arrival_data_source,
+        coalesce(dep.departure_source, 'NONE')                  as departure_data_source,
+
+        -- ── Audit ──────────────────────────────────────────────────────────
+        GREATEST(
+            coalesce(pos.last_position_at, TIMESTAMP('2000-01-01')),
+            coalesce(arr.arrival_time,     TIMESTAMP('2000-01-01')),
+            coalesce(dep.departure_time,   TIMESTAMP('2000-01-01'))
+        )                                                       as most_recent_event_at,
+
+        CURRENT_TIMESTAMP()                                     as last_updated_at
+
+    from all_imos spine
+    left join pos on spine.imo_number = pos.imo_number
+    left join arr on spine.imo_number = arr.imo_number
+    left join dep on spine.imo_number = dep.imo_number
+)
+
+select * from combined

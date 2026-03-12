@@ -1,0 +1,103 @@
+-- =============================================================================
+-- facts/fvessel_positions_latest.sql
+-- One row per IMO — the most recent AIS position ping.
+--
+-- LIVE ONLY: is_stale threshold changed from 6 HOUR → 2 HOUR.
+-- Vessels not seen in the last 2 hours are marked stale and excluded
+-- from f_vessel_live_tracking (has_live_position filter) and the
+-- backend BigQuery WHERE clause (INTERVAL 2 HOUR).
+-- =============================================================================
+config {type:'table', schema:'MPA'}
+
+with
+
+all_positions as (
+    select
+        imo_number,
+        mmsi_number,
+        vessel_name,
+        call_sign,
+        flag,
+        vessel_type,
+        gross_tonnage,
+        net_tonnage,
+        deadweight,
+        vessel_length,
+        vessel_breadth,
+        vessel_depth,
+        year_built,
+
+        -- Convert radians → degrees once here.
+        latitude  * (180 / ACOS(-1))  as latitude,
+        longitude * (180 / ACOS(-1))  as longitude,
+
+        speed_kn,
+        course_deg,
+        heading_deg,
+
+        -- Correct SGT → UTC exactly once.
+        TIMESTAMP_SUB(effective_timestamp, INTERVAL 8 HOUR) as corrected_ts,
+
+        ingested_at,
+        dt,
+
+        case
+            when speed_kn < 0.5  then 'ANCHORED'
+            when speed_kn < 3.0  then 'SLOW'
+            when speed_kn < 10.0 then 'MODERATE'
+            when speed_kn < 18.0 then 'FAST'
+            else                      'HIGH_SPEED'
+        end as speed_category
+
+    from ${ref('stg_vessel_positions') }
+),
+
+ranked as (
+    select
+        *,
+
+        -- LIVE ONLY: stale after 2 hours (was 6 hours).
+        -- Matches backend is_stale threshold and BigQuery WHERE INTERVAL 2 HOUR.
+        case
+            when TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2
+            then true else false
+        end as is_stale,
+
+        TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE)
+            as minutes_since_last_ping,
+
+        ROW_NUMBER() OVER (
+            PARTITION BY imo_number
+            ORDER BY corrected_ts DESC
+        ) as _rn
+
+    from all_positions
+)
+
+select
+    imo_number,
+    mmsi_number,
+    vessel_name,
+    call_sign,
+    flag,
+    vessel_type,
+    gross_tonnage,
+    net_tonnage,
+    deadweight,
+    vessel_length,
+    vessel_breadth,
+    vessel_depth,
+    year_built,
+    latitude,
+    longitude,
+    speed_kn,
+    course_deg,
+    heading_deg,
+    corrected_ts        as last_position_at,
+    ingested_at,
+    dt,
+    speed_category,
+    is_stale,
+    minutes_since_last_ping
+from ranked
+where _rn = 1
