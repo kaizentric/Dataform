@@ -1,13 +1,14 @@
+ config {
+  type: "table",
+  tags: ["daily"]
+}
 -- =============================================================================
 -- facts/fct_vessel_arrivals.sql
 -- One unique arrival record per IMO per date.
 -- Merges AIS/scheduled arrivals + official declarations.
 -- Priority: DECLARATION > AIS_CONFIRMED > SCHEDULED
 -- =============================================================================
- config {
-  type: "table",
-  tags: ["daily"]
-}
+
 
 with
 

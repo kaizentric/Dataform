@@ -1,3 +1,8 @@
+config {
+  type: "incremental",
+  tags: ["realtime"]
+}
+
 -- =============================================================================
 -- facts/fct_vessel_live_tracking.sql
 -- Application-facing view — consumed directly by the MarineTrack backend API.
@@ -11,10 +16,7 @@
 --   3. last_position_at used as-is — already corrected UTC from positions_latest
 --   4. minutes_since_last_ping used as-is — already correct from positions_latest
 -- =============================================================================
-config {
-  type: "incremental",
-  tags: ["realtime"]
-}
+
 
 select
     -- Identity
