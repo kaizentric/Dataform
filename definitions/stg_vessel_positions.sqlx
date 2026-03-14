@@ -3,7 +3,10 @@
 -- Cast and validated AIS position snapshot from vessel_positions_ext
 -- All fields type-safe. One row per position ping (full history preserved).
 -- =============================================================================
- config {type:'table', schema:'MPA' }
+ config {
+  type: "incremental",
+  tags: ["realtime"]
+}
 
 with source as (
 

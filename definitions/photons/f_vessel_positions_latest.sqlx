@@ -7,7 +7,10 @@
 -- from f_vessel_live_tracking (has_live_position filter) and the
 -- backend BigQuery WHERE clause (INTERVAL 2 HOUR).
 -- =============================================================================
-config {type:'table', schema:'MPA'}
+config {
+  type: "incremental",
+  tags: ["realtime"]
+}
 
 with
 

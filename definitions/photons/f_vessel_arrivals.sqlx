@@ -4,7 +4,10 @@
 -- Merges AIS/scheduled arrivals + official declarations.
 -- Priority: DECLARATION > AIS_CONFIRMED > SCHEDULED
 -- =============================================================================
- config { type :'view', schema:'MPA' }
+ config {
+  type: "table",
+  tags: ["daily"]
+}
 
 with
 
