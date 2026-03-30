@@ -2,10 +2,7 @@ config {
   type: "incremental",
   schema: "MPA",
   tags: ["realtime"],
-  bigquery: {
-    partitionBy: "dt",
-    clusterBy: ["mmsi_number", "imo_number"]
-  }
+   
 }
 
 with source as (
