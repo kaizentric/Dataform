@@ -40,8 +40,9 @@ with source as (
 
     from `photons-377606.MPA.vessel_positions_ext`
 
-    where effective_timestamp is not null
-      and SAFE_CAST(imo_number AS STRING) is not null
+   where effective_timestamp is not null
+    and imo_number is not null
+    ${ when(incremental(), `AND dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`) }
 
 )
 
