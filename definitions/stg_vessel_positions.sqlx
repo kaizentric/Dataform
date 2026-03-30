@@ -1,6 +1,3 @@
- 
-
-   
 config {
   type: "incremental",
   schema: "MPA",
@@ -11,12 +8,6 @@ config {
     clusterBy: ["mmsi_number", "imo_number"]
   }
 }
-
--- =============================================================================
--- staging/stg_vessel_positions.sqlx
--- Cast and validated AIS position snapshot from vessel_positions_ext
--- All fields type-safe. One row per position ping (full history preserved).
--- =============================================================================
 
 with source as (
 
@@ -43,16 +34,16 @@ with source as (
     SAFE_CAST(course  AS FLOAT64)       as course_deg,
     SAFE_CAST(heading AS FLOAT64)       as heading_deg,
 
-    -- effective_timestamp: no timezone, e.g. "2026-03-03T01:09:03"
-    SAFE.PARSE_TIMESTAMP(
-      '%Y-%m-%dT%H:%M:%S',
-      effective_timestamp
+    COALESCE(
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_timestamp),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    effective_timestamp),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   effective_timestamp)
     )                                   as effective_timestamp,
 
-    -- ingested_at: milliseconds + Z, e.g. "2026-03-02T17:13:03.332Z"
-    SAFE.PARSE_TIMESTAMP(
-      '%Y-%m-%dT%H:%M:%E*SZ',
-      ingested_at
+    COALESCE(
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', ingested_at),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    ingested_at),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   ingested_at)
     )                                   as ingested_at,
 
     dt
@@ -70,3 +61,6 @@ from source
 where latitude  between -90  and 90
   and longitude between -180 and 180
   and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)
+
+  
+ 
