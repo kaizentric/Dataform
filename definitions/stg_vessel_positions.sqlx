@@ -1,3 +1,4 @@
+ 
 config {
   type: "incremental",
   schema: "MPA",
@@ -8,6 +9,12 @@ config {
     clusterBy: ["mmsi_number", "imo_number"]
   }
 }
+
+-- =============================================================================
+-- staging/stg_vessel_positions.sqlx
+-- Cast and validated AIS position snapshot from vessel_positions_ext
+-- All fields type-safe. One row per position ping (full history preserved).
+-- =============================================================================
 
 with source as (
 
@@ -52,6 +59,7 @@ with source as (
 
   where effective_timestamp is not null
     and imo_number is not null
+    and mmsi_number is not null
     ${ when(incremental(), `AND dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`) }
 
 ),
@@ -60,18 +68,18 @@ deduplicated as (
 
   select *
   from source
-  where latitude  between -90  and 90
+  -- parsed timestamps must not be null after COALESCE
+  where effective_timestamp is not null
+    and latitude  between -90  and 90
     and longitude between -180 and 180
     and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)
-    -- keep one row per unique key, latest ingested_at wins
     qualify ROW_NUMBER() OVER (
       PARTITION BY imo_number, mmsi_number, effective_timestamp
-      ORDER BY ingested_at DESC
+      ORDER BY ingested_at DESC NULLS LAST, dt DESC
     ) = 1
 
 )
 
 select * from deduplicated
-
  
- 
+  
