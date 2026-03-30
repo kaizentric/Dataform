@@ -8,12 +8,6 @@ config {
   }
 }
 
--- =============================================================================
--- staging/stg_vessel_positions.sqlx
--- Cast and validated AIS position snapshot from vessel_positions_ext
--- All fields type-safe. One row per position ping (full history preserved).
--- =============================================================================
-
 with source as (
 
   select
@@ -53,7 +47,7 @@ with source as (
 
     dt
 
- from `photons-377606.MPA.vessel_positions_ext`
+from `photons-377606.MPA.vessel_positions_ext`
 
   where effective_timestamp is not null
     and imo_number is not null
@@ -69,4 +63,4 @@ where effective_timestamp is not null
   and longitude between -180 and 180
   and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)
 
-   
+  
