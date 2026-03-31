@@ -53,7 +53,7 @@ filtered AS (
     `) }
 ),
 
--- Deduplicate by vessel_id + rounded timestamp
+-- Deduplicate by vessel_id + rounded timestamp ss
 deduped AS (
   SELECT *,
          ROW_NUMBER() OVER (
