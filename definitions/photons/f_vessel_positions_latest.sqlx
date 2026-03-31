@@ -1,5 +1,6 @@
 config {
   type: "table",
+  schema: "MPA",
   tags: ["realtime"]
 }
 
@@ -26,7 +27,7 @@ WITH all_positions AS (
     course_deg,
     heading_deg,
 
-    -- Use effective_ts from staging
+    -- Use effective_ts from staging (already parsed from raw effective_timestamp string)
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
 
     ingested_ts AS ingested_at,
