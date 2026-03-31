@@ -1,7 +1,6 @@
 config {
-  type: "table",
-  schema: "MPA",
-  tags: ["realtime"]
+    type: "table",
+    tags: ["realtime"]
 }
 
 WITH all_positions AS (
@@ -20,19 +19,21 @@ WITH all_positions AS (
     vessel_depth,
     year_built,
 
-    latitude,
-    longitude,
+    latitude * (180 / ACOS(-1)) AS latitude,
+    longitude * (180 / ACOS(-1)) AS longitude,
 
     speed_kn,
     course_deg,
     heading_deg,
 
-    -- Use effective_ts from staging (already parsed from raw effective_timestamp string)
+    -- Correct SGT → UTC using the staging column effective_ts
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
 
+    -- Use staging ingestion timestamp
     ingested_ts AS ingested_at,
     dt,
 
+    -- Speed category
     CASE
       WHEN speed_kn < 0.5 THEN 'ANCHORED'
       WHEN speed_kn < 3.0 THEN 'SLOW'
@@ -40,6 +41,7 @@ WITH all_positions AS (
       WHEN speed_kn < 18.0 THEN 'FAST'
       ELSE 'HIGH_SPEED'
     END AS speed_category
+
   FROM ${ref('stg_vessel_positions')}
 ),
 
