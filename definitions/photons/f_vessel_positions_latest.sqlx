@@ -1,15 +1,14 @@
 config {
-    type: "table",
-     
-    tags: ["realtime"]
+  type: "table",
+  tags: ["realtime"]
 }
 
-  -- =============================================================================
-  -- facts/fvessel_positions_latest.sql
-  -- One row per IMO — the most recent AIS position ping.
-  -- =============================================================================
-WITH
-  all_positions AS (
+-- =============================================================================
+-- facts/fvessel_positions_latest.sql
+-- One row per vessel — the most recent AIS position ping.
+-- =============================================================================
+
+WITH all_positions AS (
   SELECT
     imo_number,
     mmsi_number,
@@ -24,40 +23,50 @@ WITH
     vessel_breadth,
     vessel_depth,
     year_built,
-    -- Convert radians → degrees once here.
     latitude * (180 / ACOS(-1)) AS latitude,
     longitude * (180 / ACOS(-1)) AS longitude,
     speed_kn,
     course_deg,
     heading_deg,
-    -- Correct SGT → UTC exactly once.
-    TIMESTAMP_SUB(effective_timestamp, INTERVAL 8 HOUR) AS corrected_ts,
-    ingested_at,
+
+    -- Correct SGT → UTC exactly once
+    TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
+    ingested_ts AS ingested_at,
     dt,
+
+    -- Speed category
     CASE
       WHEN speed_kn < 0.5 THEN 'ANCHORED'
       WHEN speed_kn < 3.0 THEN 'SLOW'
       WHEN speed_kn < 10.0 THEN 'MODERATE'
       WHEN speed_kn < 18.0 THEN 'FAST'
       ELSE 'HIGH_SPEED'
-  END
-    AS speed_category
-  FROM
-    ${ref('stg_vessel_positions')} ),
-  ranked AS (
+    END AS speed_category,
+
+    -- Unique vessel ID for deduplication
+    COALESCE(imo_number, mmsi_number) AS vessel_id
+
+  FROM ${ref('stg_vessel_positions')}
+  WHERE latitude BETWEEN -90 AND 90
+    AND longitude BETWEEN -180 AND 180
+    AND NOT (ABS(latitude) < 0.01 AND ABS(longitude) < 0.01)
+),
+
+ranked AS (
   SELECT
     *,
-    -- LIVE ONLY: stale after 2 hours (was 6 hours).
-    -- Matches backend is_stale threshold and BigQuery WHERE INTERVAL 2 HOUR.
+    -- Mark stale vessels: more than 2 hours old
     CASE
       WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
       ELSE FALSE
-  END
-    AS is_stale,
+    END AS is_stale,
     TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
-    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC ) AS _rn
-  FROM
-    all_positions )
+
+    -- Keep the most recent ping per vessel
+    ROW_NUMBER() OVER (PARTITION BY vessel_id ORDER BY corrected_ts DESC) AS _rn
+  FROM all_positions
+)
+
 SELECT
   imo_number,
   mmsi_number,
@@ -82,8 +91,7 @@ SELECT
   dt,
   speed_category,
   is_stale,
-  minutes_since_last_ping
-FROM
-  ranked
-WHERE
-  _rn = 1
+  minutes_since_last_ping,
+  vessel_id
+FROM ranked
+WHERE _rn = 1
