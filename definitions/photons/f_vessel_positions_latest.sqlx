@@ -1,12 +1,10 @@
 config {
-  type: "table",
-  schema: "MPA",
-  tags: ["realtime"]
+    type: "table",
+    tags: ["realtime"]
 }
 
-with all_positions as (
-
-  select
+WITH all_positions AS (
+  SELECT
     imo_number,
     mmsi_number,
     vessel_name,
@@ -20,40 +18,46 @@ with all_positions as (
     vessel_breadth,
     vessel_depth,
     year_built,
-    latitude  * (180 / ACOS(-1)) as latitude,
-    longitude * (180 / ACOS(-1)) as longitude,
+
+    latitude * (180 / ACOS(-1)) AS latitude,
+    longitude * (180 / ACOS(-1)) AS longitude,
+
     speed_kn,
     course_deg,
     heading_deg,
-    TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
-    ingested_ts                                   as ingested_at,
-    dt,
-    case
-      when speed_kn < 0.5  then 'ANCHORED'
-      when speed_kn < 3.0  then 'SLOW'
-      when speed_kn < 10.0 then 'MODERATE'
-      when speed_kn < 18.0 then 'FAST'
-      else 'HIGH_SPEED'
-    end as speed_category
-  from ${ref('stg_vessel_positions')}
 
+    -- Correct SGT → UTC using the staging column effective_ts
+    TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
+
+    -- Use staging ingestion timestamp
+    ingested_ts AS ingested_at,
+    dt,
+
+    -- Speed category
+    CASE
+      WHEN speed_kn < 0.5 THEN 'ANCHORED'
+      WHEN speed_kn < 3.0 THEN 'SLOW'
+      WHEN speed_kn < 10.0 THEN 'MODERATE'
+      WHEN speed_kn < 18.0 THEN 'FAST'
+      ELSE 'HIGH_SPEED'
+    END AS speed_category
+
+  FROM ${ref('stg_vessel_positions')}
 ),
 
-ranked as (
-
-  select
+ranked AS (
+  SELECT
     *,
-    case
-      when TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 then true
-      else false
-    end as is_stale,
-    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) as minutes_since_last_ping,
-    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) as _rn
-  from all_positions
-
+    CASE
+      WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
+      ELSE FALSE
+    END AS is_stale,
+    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
+    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) AS _rn
+  FROM all_positions
 )
 
-select
+SELECT
   imo_number,
   mmsi_number,
   vessel_name,
@@ -72,11 +76,11 @@ select
   speed_kn,
   course_deg,
   heading_deg,
-  corrected_ts        as last_position_at,
+  corrected_ts AS last_position_at,
   ingested_at,
   dt,
   speed_category,
   is_stale,
   minutes_since_last_ping
-from ranked
-where _rn = 1
+FROM ranked
+WHERE _rn = 1
