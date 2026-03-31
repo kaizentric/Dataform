@@ -1,16 +1,12 @@
 config {
-    type: "table",
-     
-    tags: ["realtime"]
+  type: "table",
+  schema: "MPA",
+  tags: ["realtime"]
 }
 
-  -- =============================================================================
-  -- facts/fvessel_positions_latest.sql
-  -- One row per IMO — the most recent AIS position ping.
-  -- =============================================================================
-WITH
-  all_positions AS (
-  SELECT
+with all_positions as (
+
+  select
     imo_number,
     mmsi_number,
     vessel_name,
@@ -24,41 +20,40 @@ WITH
     vessel_breadth,
     vessel_depth,
     year_built,
-    -- Convert radians → degrees once here.
-    latitude * (180 / ACOS(-1)) AS latitude,
-    longitude * (180 / ACOS(-1)) AS longitude,
+    latitude  * (180 / ACOS(-1)) as latitude,
+    longitude * (180 / ACOS(-1)) as longitude,
     speed_kn,
     course_deg,
     heading_deg,
-    -- Correct SGT → UTC exactly once.
-    TIMESTAMP_SUB(effective_timestamp, INTERVAL 8 HOUR) AS corrected_ts,
-    ingested_at,
+    TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
+    ingested_ts                                   as ingested_at,
     dt,
-    CASE
-      WHEN speed_kn < 0.5 THEN 'ANCHORED'
-      WHEN speed_kn < 3.0 THEN 'SLOW'
-      WHEN speed_kn < 10.0 THEN 'MODERATE'
-      WHEN speed_kn < 18.0 THEN 'FAST'
-      ELSE 'HIGH_SPEED'
-  END
-    AS speed_category
-  FROM
-    ${ref('stg_vessel_positions')} ),
-  ranked AS (
-  SELECT
+    case
+      when speed_kn < 0.5  then 'ANCHORED'
+      when speed_kn < 3.0  then 'SLOW'
+      when speed_kn < 10.0 then 'MODERATE'
+      when speed_kn < 18.0 then 'FAST'
+      else 'HIGH_SPEED'
+    end as speed_category
+  from ${ref('stg_vessel_positions')}
+
+),
+
+ranked as (
+
+  select
     *,
-    -- LIVE ONLY: stale after 2 hours (was 6 hours).
-    -- Matches backend is_stale threshold and BigQuery WHERE INTERVAL 2 HOUR.
-    CASE
-      WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
-      ELSE FALSE
-  END
-    AS is_stale,
-    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
-    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC ) AS _rn
-  FROM
-    all_positions )
-SELECT
+    case
+      when TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 then true
+      else false
+    end as is_stale,
+    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) as minutes_since_last_ping,
+    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) as _rn
+  from all_positions
+
+)
+
+select
   imo_number,
   mmsi_number,
   vessel_name,
@@ -77,13 +72,11 @@ SELECT
   speed_kn,
   course_deg,
   heading_deg,
-  corrected_ts AS last_position_at,
+  corrected_ts        as last_position_at,
   ingested_at,
   dt,
   speed_category,
   is_stale,
   minutes_since_last_ping
-FROM
-  ranked
-WHERE
-  _rn = 1
+from ranked
+where _rn = 1

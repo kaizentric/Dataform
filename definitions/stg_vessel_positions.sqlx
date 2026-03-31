@@ -2,7 +2,6 @@ config {
   type: "incremental",
   schema: "MPA",
   tags: ["realtime"]
-   
 }
 
 with source as (
@@ -34,30 +33,27 @@ with source as (
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_timestamp),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    effective_timestamp),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   effective_timestamp)
-    )                                   as effective_timestamp,
+    )                                   as effective_ts,
 
     COALESCE(
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', ingested_at),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    ingested_at),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   ingested_at)
-    )                                   as ingested_at,
+    )                                   as ingested_ts,
 
     dt
 
-from `photons-377606.MPA.vessel_positions_ext`
+  from `photons-377606.MPA.vessel_positions_ext`
 
   where effective_timestamp is not null
-    and imo_number is not null
-    and mmsi_number is not null
+    and (imo_number is not null or mmsi_number is not null)
     ${ when(incremental(), `AND dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`) }
 
 )
 
 select *
 from source
-where effective_timestamp is not null
+where effective_ts is not null
   and latitude  between -90  and 90
   and longitude between -180 and 180
   and not (abs(latitude) < 0.01 and abs(longitude) < 0.01)
-
-  
