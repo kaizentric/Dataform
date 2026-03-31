@@ -6,38 +6,31 @@ config {
 
 WITH source AS (
   SELECT
-    SAFE_CAST(imo_number  AS STRING) AS imo_number,
+    SAFE_CAST(imo_number AS STRING) AS imo_number,
     SAFE_CAST(mmsi_number AS STRING) AS mmsi_number,
-
-    -- Vessel key: IMO primary, fallback MMSI
     COALESCE(NULLIF(TRIM(SAFE_CAST(imo_number AS STRING)), ''),
              NULLIF(TRIM(SAFE_CAST(mmsi_number AS STRING)), '')) AS vessel_id,
-
     latitude,
     longitude,
     SAFE_CAST(speed AS FLOAT64) AS speed_kn,
     SAFE_CAST(course AS FLOAT64) AS course_deg,
     SAFE_CAST(heading AS FLOAT64) AS heading_deg,
-
     COALESCE(
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_timestamp),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S', effective_timestamp),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', effective_timestamp)
     ) AS effective_ts,
-
     COALESCE(
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', ingested_at),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S', ingested_at),
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', ingested_at)
     ) AS ingested_ts,
-
     dt
   FROM `photons-377606.MPA.vessel_positions_ext`
   WHERE (imo_number IS NOT NULL OR mmsi_number IS NOT NULL)
     AND effective_timestamp IS NOT NULL
 ),
 
--- Filter invalid vessels
 filtered AS (
   SELECT *
   FROM source
@@ -45,15 +38,10 @@ filtered AS (
     AND latitude BETWEEN -90 AND 90
     AND longitude BETWEEN -180 AND 180
     AND NOT (ABS(latitude) < 0.01 AND ABS(longitude) < 0.01)
-    ${ when(incremental(), `
-      AND effective_ts > (
-        SELECT COALESCE(MAX(effective_ts), TIMESTAMP('1970-01-01'))
-        FROM ${self()}
-      )
-    `) }
+    -- incremental filter for BigQuery UI: last 1 day
+    AND effective_ts > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
 ),
 
--- Deduplicate by vessel_id + rounded timestamp ss
 deduped AS (
   SELECT *,
          ROW_NUMBER() OVER (
