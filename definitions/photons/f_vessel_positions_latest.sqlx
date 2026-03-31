@@ -3,11 +3,6 @@ config {
     tags: ["realtime"]
 }
 
--- =============================================================================
--- facts/fvessel_positions_latest.sql
--- One row per IMO — the most recent AIS position ping.
--- =============================================================================
-
 WITH all_positions AS (
   SELECT
     imo_number,
@@ -23,8 +18,7 @@ WITH all_positions AS (
     vessel_breadth,
     vessel_depth,
     year_built,
-    
-    -- Convert radians → degrees once here
+
     latitude * (180 / ACOS(-1)) AS latitude,
     longitude * (180 / ACOS(-1)) AS longitude,
 
@@ -32,10 +26,10 @@ WITH all_positions AS (
     course_deg,
     heading_deg,
 
-    -- Correct SGT → UTC
+    -- Correct SGT → UTC using the staging column effective_ts
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
 
-    -- Use ingested_ts from staging
+    -- Use staging ingestion timestamp
     ingested_ts AS ingested_at,
     dt,
 
@@ -54,14 +48,11 @@ WITH all_positions AS (
 ranked AS (
   SELECT
     *,
-    -- LIVE ONLY: stale after 2 hours
     CASE
       WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
       ELSE FALSE
     END AS is_stale,
-
     TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
-
     ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) AS _rn
   FROM all_positions
 )
