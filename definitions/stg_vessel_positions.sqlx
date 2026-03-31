@@ -1,6 +1,5 @@
 config {
-  type: "incremental",
-  schema: "MPA",
+  type: "table",
   tags: ["realtime"]
 }
 
@@ -9,7 +8,6 @@ WITH source AS (
     SAFE_CAST(imo_number AS STRING) AS imo_number,
     SAFE_CAST(mmsi_number AS STRING) AS mmsi_number,
 
-    -- Descriptive fields
     NULLIF(TRIM(vessel_name), '') AS vessel_name,
     NULLIF(TRIM(call_sign), '') AS call_sign,
     NULLIF(TRIM(flag), '') AS flag,
@@ -29,11 +27,11 @@ WITH source AS (
     SAFE_CAST(course AS FLOAT64) AS course_deg,
     SAFE_CAST(heading AS FLOAT64) AS heading_deg,
 
-    -- Parse timestamps from raw source
+    -- Parse timestamps into effective_ts / ingested_ts
     COALESCE(
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', timestamp),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S', timestamp),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', timestamp)
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_timestamp),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S', effective_timestamp),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', effective_timestamp)
     ) AS effective_ts,
 
     COALESCE(
@@ -44,7 +42,6 @@ WITH source AS (
 
     dt,
 
-    -- Unique vessel identifier
     COALESCE(
       SAFE_CAST(imo_number AS STRING),
       SAFE_CAST(mmsi_number AS STRING)
@@ -52,7 +49,7 @@ WITH source AS (
 
   FROM `photons-377606.MPA.vessel_positions_ext`
   WHERE (imo_number IS NOT NULL OR mmsi_number IS NOT NULL)
-    AND timestamp IS NOT NULL
+    AND effective_timestamp IS NOT NULL
     ${when(incremental(), `AND dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)`)}
 ),
 

@@ -1,6 +1,6 @@
 config {
-    type: "table",
-    tags: ["realtime"]
+  type: "table",
+  tags: ["realtime"]
 }
 
 WITH all_positions AS (
@@ -19,21 +19,19 @@ WITH all_positions AS (
     vessel_depth,
     year_built,
 
-    latitude * (180 / ACOS(-1)) AS latitude,
-    longitude * (180 / ACOS(-1)) AS longitude,
+    latitude,
+    longitude,
 
     speed_kn,
     course_deg,
     heading_deg,
 
-    -- Correct SGT → UTC using the staging column effective_ts
+    -- Use effective_ts from staging
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
 
-    -- Use staging ingestion timestamp
     ingested_ts AS ingested_at,
     dt,
 
-    -- Speed category
     CASE
       WHEN speed_kn < 0.5 THEN 'ANCHORED'
       WHEN speed_kn < 3.0 THEN 'SLOW'
@@ -41,13 +39,12 @@ WITH all_positions AS (
       WHEN speed_kn < 18.0 THEN 'FAST'
       ELSE 'HIGH_SPEED'
     END AS speed_category
-  FROM `photons-377606.MPA.stg_vessel_positions`
+  FROM ${ref('stg_vessel_positions')}
 ),
 
 ranked AS (
   SELECT
     *,
-    -- Mark stale positions after 2 hours
     CASE
       WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
       ELSE FALSE
