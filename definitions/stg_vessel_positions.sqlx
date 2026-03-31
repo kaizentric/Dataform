@@ -10,7 +10,7 @@ WITH source AS (
     SAFE_CAST(imo_number  AS STRING)    AS imo_number,
     SAFE_CAST(mmsi_number AS STRING)    AS mmsi_number,
 
-    -- ✅ Vessel key: IMO priority, fallback MMSI
+    -- ✅ Vessel key
     COALESCE(
       NULLIF(TRIM(SAFE_CAST(imo_number AS STRING)), ''),
       NULLIF(TRIM(SAFE_CAST(mmsi_number AS STRING)), '')
@@ -35,51 +35,47 @@ WITH source AS (
     SAFE_CAST(course  AS FLOAT64)       AS course_deg,
     SAFE_CAST(heading AS FLOAT64)       AS heading_deg,
 
+    -- ✅ renamed parsed timestamps
     COALESCE(
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', effective_timestamp),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    
-effective_timestamp),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   
-effective_timestamp)
-    ) AS effective_timestamp,
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    effective_timestamp),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   effective_timestamp)
+    ) AS effective_ts,
 
     COALESCE(
       SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*SZ', ingested_at),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    
-ingested_at),
-      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   
-ingested_at)
-    ) AS ingested_at,
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%S',    ingested_at),
+      SAFE.PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ',   ingested_at)
+    ) AS ingested_ts,
 
     dt
 
   FROM `photons-377606.MPA.vessel_positions_ext`
 
   WHERE (imo_number IS NOT NULL OR mmsi_number IS NOT NULL)
-    AND effective_timestamp IS NOT NULL
+),
 
-    -- ✅ Incremental load: only new data
+-- ✅ filter AFTER parsing (important)
+filtered AS (
+  SELECT *
+  FROM source
+  WHERE vessel_id IS NOT NULL
+    AND effective_ts IS NOT NULL
+
     ${ when(incremental(), `
-      AND effective_timestamp > (
-        SELECT COALESCE(MAX(effective_timestamp), TIMESTAMP('1970-01-01'))
+      AND effective_ts > (
+        SELECT COALESCE(MAX(effective_ts), TIMESTAMP('1970-01-01'))
         FROM ${self()}
       )
     `) }
 ),
 
--- 🚫 remove null vessel_id
-filtered AS (
-  SELECT *
-  FROM source
-  WHERE vessel_id IS NOT NULL
-),
-
--- ✅ Deduplicate: same vessel + timestamp
+-- ✅ Deduplicate
 deduped AS (
   SELECT *,
     ROW_NUMBER() OVER (
-      PARTITION BY vessel_id, effective_timestamp
-      ORDER BY ingested_at DESC   -- keep latest record
+      PARTITION BY vessel_id, effective_ts
+      ORDER BY ingested_ts DESC
     ) AS rn
   FROM filtered
 ),
