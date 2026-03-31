@@ -3,11 +3,6 @@ config {
   tags: ["realtime"]
 }
 
--- =============================================================================
--- facts/fvessel_positions_latest.sql
--- One row per vessel — the most recent AIS position ping.
--- =============================================================================
-
 WITH all_positions AS (
   SELECT
     imo_number,
@@ -29,12 +24,11 @@ WITH all_positions AS (
     course_deg,
     heading_deg,
 
-    -- Correct SGT → UTC exactly once
+    -- Use effective_ts from staging, not effective_timestamp
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
     ingested_ts AS ingested_at,
     dt,
 
-    -- Speed category
     CASE
       WHEN speed_kn < 0.5 THEN 'ANCHORED'
       WHEN speed_kn < 3.0 THEN 'SLOW'
@@ -43,7 +37,6 @@ WITH all_positions AS (
       ELSE 'HIGH_SPEED'
     END AS speed_category,
 
-    -- Unique vessel ID for deduplication
     COALESCE(imo_number, mmsi_number) AS vessel_id
 
   FROM ${ref('stg_vessel_positions')}
@@ -55,14 +48,11 @@ WITH all_positions AS (
 ranked AS (
   SELECT
     *,
-    -- Mark stale vessels: more than 2 hours old
     CASE
       WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
       ELSE FALSE
     END AS is_stale,
     TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
-
-    -- Keep the most recent ping per vessel
     ROW_NUMBER() OVER (PARTITION BY vessel_id ORDER BY corrected_ts DESC) AS _rn
   FROM all_positions
 )
