@@ -1,6 +1,6 @@
 config {
-    type: "table",
-    tags: ["realtime"]
+  type: "table",
+  tags: ["realtime"]
 }
 
 WITH all_positions AS (
@@ -19,21 +19,19 @@ WITH all_positions AS (
     vessel_depth,
     year_built,
 
-    latitude * (180 / ACOS(-1)) AS latitude,
-    longitude * (180 / ACOS(-1)) AS longitude,
-
+    latitude,
+    longitude,
     speed_kn,
     course_deg,
     heading_deg,
 
-    -- Correct SGT → UTC using the staging column effective_ts
+    -- Correct SGT → UTC using staging column effective_ts
     TIMESTAMP_SUB(effective_ts, INTERVAL 8 HOUR) AS corrected_ts,
 
-    -- Use staging ingestion timestamp
+    -- Staging ingestion timestamp
     ingested_ts AS ingested_at,
     dt,
 
-    -- Speed category
     CASE
       WHEN speed_kn < 0.5 THEN 'ANCHORED'
       WHEN speed_kn < 3.0 THEN 'SLOW'
@@ -46,14 +44,13 @@ WITH all_positions AS (
 ),
 
 ranked AS (
-  SELECT
-    *,
-    CASE
-      WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
-      ELSE FALSE
-    END AS is_stale,
-    TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
-    ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) AS _rn
+  SELECT *,
+         CASE
+           WHEN TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, HOUR) > 2 THEN TRUE
+           ELSE FALSE
+         END AS is_stale,
+         TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), corrected_ts, MINUTE) AS minutes_since_last_ping,
+         ROW_NUMBER() OVER (PARTITION BY imo_number ORDER BY corrected_ts DESC) AS _rn
   FROM all_positions
 )
 
